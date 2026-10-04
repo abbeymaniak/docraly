@@ -9,7 +9,7 @@ pub struct ProjectInfo {
     pub frameworks: Vec<Framework>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Language {
     Php,
     Python,
@@ -19,7 +19,7 @@ pub enum Language {
     Go,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Framework {
     Laravel,
     Symfony,

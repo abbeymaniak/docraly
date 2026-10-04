@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Function {
     pub name: String,
@@ -5,12 +6,14 @@ pub struct Function {
     pub return_type: Option<Type>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Parameter {
     pub name: String,
     pub type_name: Option<Type>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Class {
     pub name: String,
@@ -18,6 +21,7 @@ pub struct Class {
     pub methods: Vec<Method>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Method {
     pub name: String,
@@ -25,6 +29,7 @@ pub struct Method {
     pub return_type: Option<Type>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Type {
     pub name: String,

@@ -2,6 +2,7 @@ mod model;
 mod parser;
 mod manifest;
 mod discovery;
+mod scanner;
 
 use clap::{Parser, Subcommand};
 use colored::*;
@@ -10,6 +11,7 @@ use std::{fs, thread, time::Duration};
 use figlet_rs::Toilet;
 use parser::{find_classes, find_functions, parse_php};
 use discovery::discover_project;
+use scanner::scan_project_sources;
 
 
 
@@ -190,6 +192,23 @@ fn run_scan(path: &str) {
     } else {
         for framework in &project.frameworks {
             println!("  - {:?}", framework);
+        }
+    }
+
+    let source_files = scan_project_sources(&project);
+
+    println!();
+    println!(
+        "{}",
+        format!("Source files ({} found):", source_files.len())
+            .cyan()
+            .bold()
+    );
+    if source_files.is_empty() {
+        println!("  (none found)");
+    } else {
+        for file in &source_files {
+            println!("  - {}", file.relative_path.display());
         }
     }
 }
