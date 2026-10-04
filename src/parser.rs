@@ -1,7 +1,5 @@
-use tree_sitter::{Node,Parser};
-use tree_sitter_php;
-use std::fs;
-use std::error::Error;
+use crate::model::{Function, Parameter, Type};
+use tree_sitter::{Node, Parser};
 
 pub fn parse_php(source: &str) -> Result<tree_sitter::Tree, String> {
     let mut parser = Parser::new();
@@ -17,20 +15,124 @@ pub fn parse_php(source: &str) -> Result<tree_sitter::Tree, String> {
         .ok_or_else(|| "Failed to parse PHP source".to_string())
 }
 
-pub fn print_ast(node: Node, source: &str, depth: usize) {
+pub fn find_functions(node: Node, source: &str) -> Vec<Function> {
+    let mut functions = Vec::new();
 
-    let indentation = "  ".repeat(depth);
+    collect_functions(node, source, &mut functions);
 
-    println!(
-        "{}{}: {:?}",
-        indentation,
-        node.kind(),
-        node.utf8_text(source.as_bytes()).unwrap_or("")
-    );
+    functions
+}
+
+fn collect_functions(
+    node: Node,
+    source: &str,
+    functions: &mut Vec<Function>,
+) {
+    if node.kind() == "function_definition" {
+        if let Some(function) = extract_function(node, source) {
+            functions.push(function);
+        }
+    }
 
     let mut cursor = node.walk();
 
     for child in node.children(&mut cursor) {
-        print_ast(child, source, depth + 1);
+        collect_functions(child, source, functions);
     }
+}
+
+fn extract_function(node: Node, source: &str) -> Option<Function> {
+    let mut name = String::new();
+    let mut parameters = Vec::new();
+    let mut return_type = None;
+
+    let mut cursor = node.walk();
+
+    for child in node.children(&mut cursor) {
+        // println!("CHILD: {}", child.kind());
+        match child.kind() {
+            "name" => {
+                name = child_text(child, source);
+            }
+
+            "formal_parameters" => {
+                parameters = extract_parameters(child, source);
+            }
+
+           "primitive_type" | "named_type" => {
+    let text = child_text(child, source)
+        .trim()
+        .to_string();
+
+    if !text.is_empty() {
+        return_type = Some(Type {
+            nullable: text.starts_with('?'),
+            name: text.trim_start_matches('?').to_string(),
+        });
+    }
+}
+
+
+            _ => {}
+        }
+    }
+
+    if name.is_empty() {
+        return None;
+    }
+
+    Some(Function {
+        name,
+        parameters,
+        return_type,
+    })
+}
+
+fn extract_parameters(node: Node, source: &str) -> Vec<Parameter> {
+    let mut parameters = Vec::new();
+
+    let mut cursor = node.walk();
+
+    for child in node.named_children(&mut cursor) {
+        if child.kind() == "simple_parameter" {
+            parameters.push(extract_parameter(child, source));
+        }
+    }
+
+    parameters
+}
+
+fn extract_parameter(node: Node, source: &str) -> Parameter {
+    let mut name = String::new();
+    let mut type_name: Option<Type> = None;
+
+    let mut cursor = node.walk();
+
+    for child in node.named_children(&mut cursor) {
+        match child.kind() {
+            "variable_name" => {
+                name = child_text(child, source);
+            }
+
+           "type" | "primitive_type" => {
+                let text = child_text(child, source);
+                type_name = Some(Type {
+                    nullable: text.starts_with('?'),
+                    name: text.trim_start_matches('?').to_string(),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    Parameter {
+        name,
+        type_name,
+    }
+}
+
+fn child_text(node: Node, source: &str) -> String {
+    node.utf8_text(source.as_bytes())
+        .unwrap_or("")
+        .to_string()
 }

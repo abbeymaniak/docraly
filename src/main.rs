@@ -1,3 +1,4 @@
+mod model;
 mod parser;
 
 use clap::Parser;
@@ -5,7 +6,7 @@ use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::{fs, thread, time::Duration};
 use figlet_rs::Toilet;
-use parser::print_ast;
+use parser::{find_functions, parse_php};
 
 #[derive(Parser)]
 #[command(name = "docraly")]
@@ -106,10 +107,29 @@ fn main() {
 
         pb.finish_with_message("✓ Analysis complete".green().to_string());
 
-         println!();
-         println!("Root node: {}", tree.root_node().kind());
-         
-         println!();
-print_ast(tree.root_node(), &source, 0);
-    }
+        //  println!();
+        //  println!("Root node: {}", tree.root_node().kind());
+
+        //  println!();
+        // print_ast(tree.root_node(), &source, 0);
+
+
+        // println!();
+        // println!("{}","\n=== Analyzing Functions ===".yellow());
+        // find_functions(tree.root_node(), &source);
+
+        let functions = find_functions(tree.root_node(), &source);
+
+
+        println!("=== AST ===");
+// print_ast(tree.root_node(), &source);
+
+        println!();
+        println!("{}","\n=== Analyzing Functions ===".yellow());
+        for function in &functions {
+            println!("{:#?}", function);
+        }
+
+       
+        }
 }
