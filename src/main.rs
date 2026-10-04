@@ -2,13 +2,13 @@ use clap::Parser;
 use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::{thread, time::Duration};
-use figlet_rs::{FIGlet, Toilet};
+use figlet_rs::Toilet;
 
 #[derive(Parser)]
 #[command(name = "docraly")]
 #[command(about = "Automatic API documentation from code")]
 struct Args {
-    file: String,
+    file: Option<String>,
 }
 
 fn print_banner() {
@@ -47,18 +47,33 @@ fn main() {
 
     print_banner();
 
-    let pb = ProgressBar::new_spinner();
+    if let Some(file) = args.file {
+        let pb = ProgressBar::new_spinner();
 
-    pb.set_style(
-        ProgressStyle::with_template("{spinner:.green} {msg}")
-            .unwrap()
-            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
-    );
+        pb.set_style(
+            ProgressStyle::with_template("{spinner:.green} {msg}")
+                .unwrap()
+                .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
+        );
 
-    pb.enable_steady_tick(Duration::from_millis(100));
-    pb.set_message(format!("Analyzing {}", args.file));
+        pb.enable_steady_tick(Duration::from_millis(100));
 
-    thread::sleep(Duration::from_secs(2));
+        // Stage 1
+        pb.set_message("Scanning project...");
+        thread::sleep(Duration::from_secs(1));
 
-    pb.finish_with_message("Analysis complete".green().to_string());
+        // Stage 2
+        pb.set_message("Parsing PHP...");
+        thread::sleep(Duration::from_secs(1));
+
+        // Stage 3
+        pb.set_message("Analyzing routes...");
+        thread::sleep(Duration::from_secs(1));
+
+        // Stage 4
+        pb.set_message(format!("Analyzing {}", file));
+        thread::sleep(Duration::from_secs(1));
+
+        pb.finish_with_message("✓ Analysis complete".green().to_string());
+    }
 }
