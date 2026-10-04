@@ -1,4 +1,4 @@
-use crate::model::{Function, Parameter, Type};
+use crate::model::{Function, Parameter, Type, Class, Method};
 use tree_sitter::{Node, Parser};
 
 pub fn parse_php(source: &str) -> Result<tree_sitter::Tree, String> {
@@ -136,3 +136,126 @@ fn child_text(node: Node, source: &str) -> String {
         .unwrap_or("")
         .to_string()
 }
+
+pub fn find_classes(node: Node, source: &str) -> Vec<Class> {
+    let mut classes = Vec::new();
+
+    collect_classes(node, source, &mut classes);
+
+    classes
+}
+
+fn collect_classes(
+    node: Node,
+    source: &str,
+    classes: &mut Vec<Class>,
+) {
+    if node.kind() == "class_declaration" {
+        if let Some(class) = extract_class(node, source) {
+            classes.push(class);
+        }
+    }
+
+    let mut cursor = node.walk();
+
+    for child in node.children(&mut cursor) {
+        collect_classes(child, source, classes);
+    }
+}
+
+fn extract_class(node: Node, source: &str) -> Option<Class> {
+    let mut name = String::new();
+
+    //Todo: we'll eventually build a proper file-level representation to get namespace.
+    // let mut namespace = None;
+    let mut methods = Vec::new();
+
+    let mut cursor = node.walk();
+
+    for child in node.named_children(&mut cursor) {
+        match child.kind() {
+            "name" => {
+                name = child_text(child, source);
+            }
+
+            "declaration_list" => {
+                methods = extract_methods(child, source);
+            }
+
+            _ => {}
+        }
+    }
+
+    if name.is_empty() {
+        return None;
+    }
+
+    Some(Class {
+        name,
+        namespace: None,
+        methods,
+    })
+}
+
+
+fn extract_methods(node: Node, source: &str) -> Vec<Method> {
+    let mut methods = Vec::new();
+
+    let mut cursor = node.walk();
+
+    for child in node.named_children(&mut cursor) {
+        if child.kind() == "method_declaration" {
+            if let Some(method) = extract_method(child, source) {
+                methods.push(method);
+            }
+        }
+    }
+
+    methods
+}
+
+fn extract_method(node: Node, source: &str) -> Option<Method> {
+    let mut name = String::new();
+    let mut parameters = Vec::new();
+    let mut return_type = None;
+
+    let mut cursor = node.walk();
+
+    for child in node.named_children(&mut cursor) {
+        match child.kind() {
+            "name" => {
+                name = child_text(child, source);
+            }
+
+            "formal_parameters" => {
+                parameters = extract_parameters(child, source);
+            }
+
+            "primitive_type" | "named_type" => {
+                let text = child_text(child, source)
+                    .trim()
+                    .to_string();
+
+                if !text.is_empty() {
+                    return_type = Some(Type {
+                        nullable: text.starts_with('?'),
+                        name: text.trim_start_matches('?').to_string(),
+                    });
+                }
+            }
+
+            _ => {}
+        }
+    }
+
+    if name.is_empty() {
+        return None;
+    }
+
+    Some(Method {
+        name,
+        parameters,
+        return_type,
+    })
+}
+

@@ -6,7 +6,8 @@ use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::{fs, thread, time::Duration};
 use figlet_rs::Toilet;
-use parser::{find_functions, parse_php};
+use parser::{find_classes, find_functions, parse_php};
+
 
 #[derive(Parser)]
 #[command(name = "docraly")]
@@ -129,6 +130,14 @@ fn main() {
         for function in &functions {
             println!("{:#?}", function);
         }
+
+        let classes = find_classes(tree.root_node(), &source);
+
+println!("=== Analyzing Classes ===");
+
+for class in &classes {
+    println!("{:#?}", class);
+}
 
        
         }
