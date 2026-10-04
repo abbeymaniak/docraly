@@ -1,7 +1,9 @@
+mod parser;
+
 use clap::Parser;
 use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
-use std::{thread, time::Duration};
+use std::{fs, thread, time::Duration};
 use figlet_rs::Toilet;
 
 #[derive(Parser)]
@@ -48,12 +50,25 @@ fn main() {
     print_banner();
 
     if let Some(file) = args.file {
+
+    let source = match fs::read_to_string(&file) {
+        Ok(source) => source,
+        Err(error) => {
+            eprintln!("{} {}", "Error:".red(), error);
+            return;
+        }
+    };
+
+  
         let pb = ProgressBar::new_spinner();
 
         pb.set_style(
             ProgressStyle::with_template("{spinner:.green} {msg}")
                 .unwrap()
-                .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
+               .tick_strings(&[
+                "⠋", "⠙", "⠹", "⠸", "⠼",
+                "⠴", "⠦", "⠧", "⠇", "⠏",
+            ]),
         );
 
         pb.enable_steady_tick(Duration::from_millis(100));
@@ -64,7 +79,21 @@ fn main() {
 
         // Stage 2
         pb.set_message("Parsing PHP...");
+
+         let tree = match parser::parse_php(&source) {
+        Ok(tree) => tree,
+        Err(error) => {
+            pb.finish_and_clear();
+            eprintln!("{} {}", "Error:".red(), error);
+            return;
+        }
+    };
         thread::sleep(Duration::from_secs(1));
+
+
+         // Stage 2.5
+        pb.set_message("Analyzing AST...");
+        thread::sleep(Duration::from_millis(500));
 
         // Stage 3
         pb.set_message("Analyzing routes...");
@@ -75,5 +104,8 @@ fn main() {
         thread::sleep(Duration::from_secs(1));
 
         pb.finish_with_message("✓ Analysis complete".green().to_string());
+
+         println!();
+    println!("Root node: {}", tree.root_node().kind());
     }
 }
