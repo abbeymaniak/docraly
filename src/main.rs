@@ -5,6 +5,7 @@ use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::{fs, thread, time::Duration};
 use figlet_rs::Toilet;
+use parser::print_ast;
 
 #[derive(Parser)]
 #[command(name = "docraly")]
@@ -106,6 +107,9 @@ fn main() {
         pb.finish_with_message("✓ Analysis complete".green().to_string());
 
          println!();
-    println!("Root node: {}", tree.root_node().kind());
+         println!("Root node: {}", tree.root_node().kind());
+         
+         println!();
+print_ast(tree.root_node(), &source, 0);
     }
 }
