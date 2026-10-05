@@ -117,7 +117,7 @@ fn main() {
         thread::sleep(Duration::from_secs(1));
 
         // Stage 2
-        pb.set_message("Parsing PHP...");
+        pb.set_message("Parsing Files...");
         let registry = AdapterRegistry::new();
         let adapter = registry
             .get(Language::Php)
@@ -139,7 +139,7 @@ fn main() {
 
         // Stage 3
         pb.set_message("Analyzing routes...");
-        thread::sleep(Duration::from_secs(1));
+        thread::sleep(Duration::from_secs(2));
 
         // Stage 4
         pb.set_message(format!("Analyzing {}", file));
@@ -192,7 +192,43 @@ fn run_scan(path: &str) {
         std::process::exit(1);
     }
 
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::with_template("{spinner:.green} {msg}")
+            .unwrap()
+            .tick_strings(&[
+                "⠋", "⠙", "⠹", "⠸", "⠼",
+                "⠴", "⠦", "⠧", "⠇", "⠏",
+            ]),
+    );
+    pb.enable_steady_tick(Duration::from_millis(100));
+
+    // Stage 1
+    pb.set_message("Scanning project...");
+    thread::sleep(Duration::from_secs(1));
     let project = discover_project(root);
+
+    // Stage 2
+    pb.set_message("Parsing Files...");
+    thread::sleep(Duration::from_secs(1));
+    let source_files = scan_project_sources(&project);
+    let registry = AdapterRegistry::new();
+    let project_model = registry.parse_project(&source_files);
+
+    // Stage 2.5
+    pb.set_message("Analyzing AST...");
+    thread::sleep(Duration::from_millis(500));
+
+    // Stage 3
+    pb.set_message("Analyzing routes...");
+    thread::sleep(Duration::from_secs(2));
+
+    // Stage 4
+    pb.set_message(format!("Analyzing {}", path));
+    thread::sleep(Duration::from_secs(1));
+
+    pb.finish_with_message("✓ Analysis complete".green().to_string());
+    println!();
 
     println!("{}", "Project detected:".green().bold());
     println!("Root: {}", project.root.display());
@@ -217,8 +253,6 @@ fn run_scan(path: &str) {
         }
     }
 
-    let source_files = scan_project_sources(&project);
-
     println!();
     println!(
         "{}",
@@ -233,9 +267,6 @@ fn run_scan(path: &str) {
             println!("  - {}", file.relative_path.display());
         }
     }
-
-    let registry = AdapterRegistry::new();
-    let project_model = registry.parse_project(&source_files);
 
     if !project_model.files.is_empty() {
         let total_classes: usize = project_model.files.iter().map(|f| f.classes.len()).sum();
