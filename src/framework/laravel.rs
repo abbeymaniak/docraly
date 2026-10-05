@@ -84,7 +84,7 @@ pub fn parse_routes_from_source(source: &str) -> Vec<Route> {
     };
 
     let mut routes = Vec::new();
-    collect_routes_from_node(tree.root_node(), source, "", &[], &mut routes);
+    collect_routes_from_node(tree.root_node(), source, "", &[], "", None, &mut routes);
     routes
 }
 
@@ -93,6 +93,8 @@ fn collect_routes_from_node(
     source: &str,
     current_prefix: &str,
     current_middleware: &[String],
+    current_name_prefix: &str,
+    current_controller: Option<&str>,
     routes: &mut Vec<Route>,
 ) {
     let mut cursor = node.walk();
@@ -106,6 +108,8 @@ fn collect_routes_from_node(
                         source,
                         current_prefix,
                         current_middleware,
+                        current_name_prefix,
+                        current_controller,
                         routes,
                     );
                 }
@@ -117,6 +121,8 @@ fn collect_routes_from_node(
                     source,
                     current_prefix,
                     current_middleware,
+                    current_name_prefix,
+                    current_controller,
                     routes,
                 );
             }
@@ -129,6 +135,8 @@ fn process_route_expression(
     source: &str,
     current_prefix: &str,
     current_middleware: &[String],
+    current_name_prefix: &str,
+    current_controller: Option<&str>,
     routes: &mut Vec<Route>,
 ) {
     if let Some(chain) = analyze_call_chain(node, source) {
@@ -138,6 +146,13 @@ fn process_route_expression(
                 None => current_prefix.to_string(),
             };
 
+            let next_name_prefix = match &chain.name {
+                Some(n) => format!("{}{}", current_name_prefix, n),
+                None => current_name_prefix.to_string(),
+            };
+
+            let next_controller = chain.controller.as_deref().or(current_controller);
+
             let mut next_middleware = current_middleware.to_vec();
             for m in chain.middleware {
                 if !next_middleware.contains(&m) {
@@ -146,18 +161,19 @@ fn process_route_expression(
             }
 
             if let Some(closure_node) = chain.group_closure {
-                // Find body of the closure (usually compound_statement)
                 if let Some(body) = find_closure_body(closure_node) {
                     collect_routes_from_node(
                         body,
                         source,
                         &next_prefix,
                         &next_middleware,
+                        &next_name_prefix,
+                        next_controller,
                         routes,
                     );
                 }
             }
-        } else if let Some(verb) = chain.http_verb {
+        } else if !chain.verbs.is_empty() {
             let uri = join_paths(current_prefix, chain.uri.as_deref().unwrap_or(""));
             let mut middleware = current_middleware.to_vec();
             for m in chain.middleware {
@@ -167,23 +183,38 @@ fn process_route_expression(
             }
 
             let path_parameters = extract_path_parameters(&uri);
+            let route_name = chain.name.map(|n| format!("{}{}", current_name_prefix, n));
 
-            if let Some(action) = chain.action {
-                routes.push(Route {
-                    http_verb: verb,
-                    uri,
-                    action,
-                    name: chain.name,
-                    middleware,
-                    path_parameters,
-                    location: Some(node_location(node)),
-                });
+            let action = match chain.action {
+                Some(RouteAction::View(ref method)) if current_controller.is_some() => {
+                    Some(RouteAction::ControllerMethod {
+                        controller_name: current_controller.unwrap().to_string(),
+                        controller_fqcn: None,
+                        method_name: method.clone(),
+                    })
+                }
+                other => other,
+            };
+
+            if let Some(act) = action {
+                for verb in chain.verbs {
+                    routes.push(Route {
+                        http_verb: verb,
+                        uri: uri.clone(),
+                        action: act.clone(),
+                        name: route_name.clone(),
+                        middleware: middleware.clone(),
+                        path_parameters: path_parameters.clone(),
+                        location: Some(node_location(node)),
+                    });
+                }
             }
         } else if chain.is_resource {
             let resource_name = chain.uri.as_deref().unwrap_or("");
             if let Some(RouteAction::ControllerMethod { controller_name, .. }) = chain.action {
                 let base_uri = join_paths(current_prefix, resource_name);
-                let param_name = resource_name.trim_end_matches('s');
+                let last_segment = resource_name.rsplit('/').next().unwrap_or(resource_name);
+                let param_name = singularize(last_segment);
                 let mut middleware = current_middleware.to_vec();
                 for m in chain.middleware {
                     if !middleware.contains(&m) {
@@ -191,48 +222,49 @@ fn process_route_expression(
                     }
                 }
 
+                let clean_name_base = resource_name.replace('/', ".");
                 let mut resource_actions = vec![
-                    ("GET", base_uri.clone(), "index", format!("{}.index", resource_name)),
+                    ("GET", base_uri.clone(), "index", format!("{}{}.index", current_name_prefix, clean_name_base)),
                 ];
                 if !chain.is_api_resource {
                     resource_actions.push((
                         "GET",
                         format!("{}/create", base_uri),
                         "create",
-                        format!("{}.create", resource_name),
+                        format!("{}{}.create", current_name_prefix, clean_name_base),
                     ));
                 }
                 resource_actions.push((
                     "POST",
                     base_uri.clone(),
                     "store",
-                    format!("{}.store", resource_name),
+                    format!("{}{}.store", current_name_prefix, clean_name_base),
                 ));
                 resource_actions.push((
                     "GET",
                     format!("{}/{{{}}}", base_uri, param_name),
                     "show",
-                    format!("{}.show", resource_name),
+                    format!("{}{}.show", current_name_prefix, clean_name_base),
                 ));
                 if !chain.is_api_resource {
                     resource_actions.push((
                         "GET",
                         format!("{}/{{{}}}/edit", base_uri, param_name),
                         "edit",
-                        format!("{}.edit", resource_name),
+                        format!("{}{}.edit", current_name_prefix, clean_name_base),
                     ));
                 }
                 resource_actions.push((
                     "PUT",
                     format!("{}/{{{}}}", base_uri, param_name),
                     "update",
-                    format!("{}.update", resource_name),
+                    format!("{}{}.update", current_name_prefix, clean_name_base),
                 ));
                 resource_actions.push((
                     "DELETE",
                     format!("{}/{{{}}}", base_uri, param_name),
                     "destroy",
-                    format!("{}.destroy", resource_name),
+                    format!("{}{}.destroy", current_name_prefix, clean_name_base),
                 ));
 
                 for (verb, uri, method_name, name) in resource_actions {
@@ -258,12 +290,13 @@ fn process_route_expression(
 
 #[derive(Default)]
 struct RouteCallChain<'a> {
-    http_verb: Option<String>,
+    verbs: Vec<String>,
     uri: Option<String>,
     action: Option<RouteAction>,
     name: Option<String>,
     middleware: Vec<String>,
     prefix: Option<String>,
+    controller: Option<String>,
     is_group: bool,
     group_closure: Option<Node<'a>>,
     is_resource: bool,
@@ -282,12 +315,10 @@ fn analyze_call_chain<'a>(node: Node<'a>, source: &str) -> Option<RouteCallChain
         if named_children.len() >= 2 {
             let method_node = named_children[1];
             let method_name = child_text(method_node, source);
-
-            // The arguments are either child 2 or inside arguments node
             let args_node = current.child_by_field_name("arguments");
 
             match method_name.as_str() {
-                "name" => {
+                "name" | "as" => {
                     if let Some(args) = args_node {
                         if let Some(first_arg) = first_argument(args) {
                             chain.name = Some(unquote(&child_text(first_arg, source)));
@@ -307,6 +338,13 @@ fn analyze_call_chain<'a>(node: Node<'a>, source: &str) -> Option<RouteCallChain
                     if let Some(args) = args_node {
                         if let Some(first_arg) = first_argument(args) {
                             chain.prefix = Some(unquote(&child_text(first_arg, source)));
+                        }
+                    }
+                }
+                "controller" => {
+                    if let Some(args) = args_node {
+                        if let Some(first_arg) = first_argument(args) {
+                            chain.controller = extract_class_from_node(first_arg, source);
                         }
                     }
                 }
@@ -346,7 +384,7 @@ fn analyze_call_chain<'a>(node: Node<'a>, source: &str) -> Option<RouteCallChain
 
                 match method_name.as_str() {
                     "get" | "post" | "put" | "patch" | "delete" | "options" | "any" => {
-                        chain.http_verb = Some(method_name.to_uppercase());
+                        chain.verbs = vec![method_name.to_uppercase()];
 
                         if let Some(args) = args_node {
                             let arg_list = argument_list(args);
@@ -355,6 +393,32 @@ fn analyze_call_chain<'a>(node: Node<'a>, source: &str) -> Option<RouteCallChain
                             }
                             if let Some(second) = arg_list.get(1) {
                                 chain.action = extract_route_action(*second, source);
+                            }
+                        }
+                        return Some(chain);
+                    }
+                    "match" => {
+                        if let Some(args) = args_node {
+                            let arg_list = argument_list(args);
+                            if let Some(first) = arg_list.first() {
+                                chain.verbs = extract_verbs_from_node(*first, source);
+                            }
+                            if let Some(second) = arg_list.get(1) {
+                                chain.uri = Some(unquote(&child_text(*second, source)));
+                            }
+                            if let Some(third) = arg_list.get(2) {
+                                chain.action = extract_route_action(*third, source);
+                            }
+                        }
+                        return Some(chain);
+                    }
+                    "fallback" => {
+                        chain.verbs = vec!["ANY".to_string()];
+                        chain.uri = Some("{fallbackPlaceholder}".to_string());
+                        if let Some(args) = args_node {
+                            let arg_list = argument_list(args);
+                            if let Some(first) = arg_list.first() {
+                                chain.action = extract_route_action(*first, source);
                             }
                         }
                         return Some(chain);
@@ -388,7 +452,7 @@ fn analyze_call_chain<'a>(node: Node<'a>, source: &str) -> Option<RouteCallChain
                         return Some(chain);
                     }
                     "view" => {
-                        chain.http_verb = Some("GET".to_string());
+                        chain.verbs = vec!["GET".to_string()];
                         if let Some(args) = args_node {
                             let arg_list = argument_list(args);
                             if let Some(first) = arg_list.first() {
@@ -418,6 +482,22 @@ fn analyze_call_chain<'a>(node: Node<'a>, source: &str) -> Option<RouteCallChain
                         }
                         return Some(chain);
                     }
+                    "controller" => {
+                        if let Some(args) = args_node {
+                            if let Some(first_arg) = first_argument(args) {
+                                chain.controller = extract_class_from_node(first_arg, source);
+                            }
+                        }
+                        return Some(chain);
+                    }
+                    "name" | "as" => {
+                        if let Some(args) = args_node {
+                            if let Some(first_arg) = first_argument(args) {
+                                chain.name = Some(unquote(&child_text(first_arg, source)));
+                            }
+                        }
+                        return Some(chain);
+                    }
                     "group" => {
                         chain.is_group = true;
                         if let Some(args) = args_node {
@@ -437,13 +517,13 @@ fn analyze_call_chain<'a>(node: Node<'a>, source: &str) -> Option<RouteCallChain
         }
     }
 
-
-    if chain.is_group || chain.http_verb.is_some() || chain.is_resource {
+    if chain.is_group || !chain.verbs.is_empty() || chain.is_resource {
         Some(chain)
     } else {
         None
     }
 }
+
 
 fn is_route_facade(scope: &str) -> bool {
     let trimmed = scope.trim().trim_start_matches('\\');
@@ -544,12 +624,9 @@ fn extract_string_from_element(element: Node, source: &str) -> Option<String> {
 
 fn find_closure_body<'a>(closure: Node<'a>) -> Option<Node<'a>> {
     let mut cursor = closure.walk();
-    for child in closure.named_children(&mut cursor) {
-        if child.kind() == "compound_statement" {
-            return Some(child);
-        }
-    }
-    None
+    closure
+        .named_children(&mut cursor)
+        .find(|&child| child.kind() == "compound_statement")
 }
 
 fn extract_group_attributes(node: Node, source: &str, chain: &mut RouteCallChain) {
@@ -565,6 +642,12 @@ fn extract_group_attributes(node: Node, source: &str, chain: &mut RouteCallChain
                     match key.as_str() {
                         "prefix" => {
                             chain.prefix = Some(unquote(&child_text(val_node, source)));
+                        }
+                        "as" | "name" => {
+                            chain.name = Some(unquote(&child_text(val_node, source)));
+                        }
+                        "controller" => {
+                            chain.controller = extract_class_from_node(val_node, source);
                         }
                         "middleware" => match val_node.kind() {
                             "string" => {
@@ -599,6 +682,62 @@ fn extract_group_attributes(node: Node, source: &str, chain: &mut RouteCallChain
     }
 }
 
+fn extract_verbs_from_node(node: Node, source: &str) -> Vec<String> {
+    let mut verbs = Vec::new();
+    match node.kind() {
+        "string" => {
+            verbs.push(unquote(&child_text(node, source)).to_uppercase());
+        }
+        "array_creation_expression" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if child.kind() == "array_element_initializer" {
+                    let mut item_cursor = child.walk();
+                    for item in child.named_children(&mut item_cursor) {
+                        if item.kind() == "string" {
+                            verbs.push(unquote(&child_text(item, source)).to_uppercase());
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    verbs
+}
+
+fn singularize(s: &str) -> String {
+    let trimmed = s.trim();
+    if trimmed.ends_with("ies") && trimmed.len() > 3 {
+        format!("{}y", &trimmed[..trimmed.len() - 3])
+    } else if trimmed.ends_with("sses") && trimmed.len() > 4 {
+        trimmed[..trimmed.len() - 2].to_string()
+    } else if trimmed.ends_with("us") || trimmed.ends_with("is") || trimmed.ends_with("ss") {
+        trimmed.to_string()
+    } else if trimmed.ends_with('s') && trimmed.len() > 1 {
+        trimmed[..trimmed.len() - 1].to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+
+fn extract_class_from_node(node: Node, source: &str) -> Option<String> {
+    match node.kind() {
+        "class_constant_access_expression" => {
+            let mut cursor = node.walk();
+            let parts: Vec<_> = node.named_children(&mut cursor).collect();
+            if parts.len() >= 2 && child_text(parts[1], source) == "class" {
+                Some(child_text(parts[0], source).trim().to_string())
+            } else {
+                None
+            }
+        }
+        "string" | "encapsed_string" => Some(unquote(&child_text(node, source))),
+        "name" | "qualified_name" => Some(child_text(node, source).trim().to_string()),
+        _ => None,
+    }
+}
 
 fn argument_list<'a>(args_node: Node<'a>) -> Vec<Node<'a>> {
     let mut cursor = args_node.walk();
@@ -641,14 +780,16 @@ fn extract_string_arguments(args_node: Node, source: &str) -> Vec<String> {
 
 fn unquote(s: &str) -> String {
     let trimmed = s.trim();
-    if (trimmed.starts_with('\'') && trimmed.ends_with('\''))
-        || (trimmed.starts_with('"') && trimmed.ends_with('"'))
+    if trimmed.len() >= 2
+        && ((trimmed.starts_with('\'') && trimmed.ends_with('\''))
+            || (trimmed.starts_with('"') && trimmed.ends_with('"')))
     {
         trimmed[1..trimmed.len() - 1].to_string()
     } else {
         trimmed.to_string()
     }
 }
+
 
 fn join_paths(prefix: &str, path: &str) -> String {
     let p = prefix.trim_matches('/');
@@ -823,5 +964,96 @@ Route::view('/about', 'pages.about');
         assert_eq!(routes[0].uri, "/about");
         assert_eq!(routes[0].action, RouteAction::View("pages.about".to_string()));
     }
+
+    #[test]
+    fn test_parse_route_controller_group() {
+        let code = r#"<?php
+use App\Http\Controllers\OrderController;
+use Illuminate\Support\Facades\Route;
+
+Route::controller(OrderController::class)->group(function () {
+    Route::get('/orders', 'index')->name('orders.index');
+    Route::post('/orders', 'store');
+});
+"#;
+        let routes = parse_routes_from_source(code);
+        assert_eq!(routes.len(), 2);
+        assert_eq!(routes[0].http_verb, "GET");
+        assert_eq!(routes[0].uri, "/orders");
+        assert_eq!(routes[0].name, Some("orders.index".to_string()));
+        assert_eq!(
+            routes[0].action,
+            RouteAction::ControllerMethod {
+                controller_name: "OrderController".to_string(),
+                controller_fqcn: None,
+                method_name: "index".to_string(),
+            }
+        );
+        assert_eq!(routes[1].http_verb, "POST");
+        assert_eq!(
+            routes[1].action,
+            RouteAction::ControllerMethod {
+                controller_name: "OrderController".to_string(),
+                controller_fqcn: None,
+                method_name: "store".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_nested_group_name_and_prefix() {
+        let code = r#"<?php
+use App\Http\Controllers\Admin\UserController;
+use Illuminate\Support\Facades\Route;
+
+Route::prefix('admin')->name('admin.')->group(function () {
+    Route::get('/users', [UserController::class, 'index'])->name('users.index');
+});
+"#;
+        let routes = parse_routes_from_source(code);
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].http_verb, "GET");
+        assert_eq!(routes[0].uri, "/admin/users");
+        assert_eq!(routes[0].name, Some("admin.users.index".to_string()));
+    }
+
+    #[test]
+    fn test_parse_route_match_and_fallback() {
+        let code = r#"<?php
+use App\Http\Controllers\FeedbackController;
+use Illuminate\Support\Facades\Route;
+
+Route::match(['GET', 'POST'], '/feedback', [FeedbackController::class, 'handle']);
+Route::fallback([FeedbackController::class, 'notFound']);
+"#;
+        let routes = parse_routes_from_source(code);
+        assert_eq!(routes.len(), 3);
+        assert_eq!(routes[0].http_verb, "GET");
+        assert_eq!(routes[0].uri, "/feedback");
+        assert_eq!(routes[1].http_verb, "POST");
+        assert_eq!(routes[1].uri, "/feedback");
+        assert_eq!(routes[2].http_verb, "ANY");
+        assert_eq!(routes[2].uri, "/{fallbackPlaceholder}");
+    }
+
+
+    #[test]
+    fn test_unquote_safety() {
+        assert_eq!(unquote(""), "");
+        assert_eq!(unquote("'"), "'");
+        assert_eq!(unquote("\""), "\"");
+        assert_eq!(unquote("''"), "");
+        assert_eq!(unquote("\"\""), "");
+        assert_eq!(unquote("'hello'"), "hello");
+    }
+
+    #[test]
+    fn test_singularize_resource() {
+        assert_eq!(singularize("users"), "user");
+        assert_eq!(singularize("categories"), "category");
+        assert_eq!(singularize("addresses"), "address");
+        assert_eq!(singularize("status"), "status");
+    }
 }
+
 

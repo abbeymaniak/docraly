@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if)]
+
 mod model;
 mod parser;
 mod manifest;

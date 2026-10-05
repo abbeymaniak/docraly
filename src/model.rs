@@ -57,9 +57,10 @@ pub fn extract_path_parameters(uri: &str) -> Vec<String> {
             current.clear();
         } else if ch == '}' {
             if in_param && !current.is_empty() {
-                let clean = current.trim_end_matches('?').to_string();
-                if !params.contains(&clean) {
-                    params.push(clean);
+                let clean = current.trim_end_matches('?');
+                let param_name = clean.split(':').next().unwrap_or(clean).to_string();
+                if !params.contains(&param_name) {
+                    params.push(param_name);
                 }
             }
             in_param = false;
@@ -70,6 +71,7 @@ pub fn extract_path_parameters(uri: &str) -> Vec<String> {
 
     params
 }
+
 
 /// Represents the analyzed model of a single source file.
 #[allow(dead_code)]
@@ -108,6 +110,27 @@ impl FileModel {
         let trimmed = name.trim();
         if trimmed.starts_with('\\') {
             return trimmed.trim_start_matches('\\').to_string();
+        }
+
+        // If it contains a backslash, check if the first segment is an import or alias
+        if let Some((first_segment, rest)) = trimmed.split_once('\\') {
+            for import in &self.imports {
+                if let Some(alias) = &import.alias {
+                    if alias == first_segment {
+                        return format!("{}\\{}", import.path, rest);
+                    }
+                } else {
+                    let last_segment = import.path.rsplit('\\').next().unwrap_or(&import.path);
+                    if last_segment == first_segment {
+                        return format!("{}\\{}", import.path, rest);
+                    }
+                }
+            }
+
+            // If it already looks like a root namespace like App\... or Database\...
+            if trimmed.starts_with("App\\") || trimmed.starts_with("Database\\") {
+                return trimmed.to_string();
+            }
         }
 
         // Check if trimmed matches an import alias or the final segment of an import path
@@ -173,15 +196,14 @@ impl ProjectModel {
             ..
         } = &route.action
         {
-            if let Some(class) = self.find_class_by_fqcn(fqcn) {
-                if let Some(method) = class.find_method(method_name) {
-                    return Some((class, method));
-                }
-            }
+            let class = self.find_class_by_fqcn(fqcn)?;
+            let method = class.find_method(method_name)?;
+            return Some((class, method));
         }
         None
     }
 }
+
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -218,8 +240,9 @@ impl Class {
     }
 
     pub fn find_method(&self, name: &str) -> Option<&Method> {
-        self.methods.iter().find(|m| m.name == name)
+        self.methods.iter().find(|m| m.name.eq_ignore_ascii_case(name))
     }
+
 }
 
 #[allow(dead_code)]
@@ -268,6 +291,35 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_class_name_with_sub_namespace_and_alias() {
+        let mut file = FileModel::new(
+            PathBuf::from("routes/web.php"),
+            PathBuf::from("routes/web.php"),
+        );
+        file.imports.push(Import {
+            path: "App\\Http\\Controllers\\Auth".to_string(),
+            alias: None,
+        });
+        file.imports.push(Import {
+            path: "App\\Http\\Controllers\\Admin".to_string(),
+            alias: Some("AdminPanel".to_string()),
+        });
+
+        assert_eq!(
+            file.resolve_class_name("Auth\\LoginController"),
+            "App\\Http\\Controllers\\Auth\\LoginController"
+        );
+        assert_eq!(
+            file.resolve_class_name("AdminPanel\\UserController"),
+            "App\\Http\\Controllers\\Admin\\UserController"
+        );
+        assert_eq!(
+            file.resolve_class_name("App\\Http\\Controllers\\CustomController"),
+            "App\\Http\\Controllers\\CustomController"
+        );
+    }
+
+    #[test]
     fn test_resolve_class_name_with_namespace() {
         let mut file = FileModel::new(
             PathBuf::from("app/Http/Controllers/UserController.php"),
@@ -292,6 +344,10 @@ mod tests {
         assert_eq!(
             extract_path_parameters("/posts/{post_id}/comments/{id?}"),
             vec!["post_id", "id"]
+        );
+        assert_eq!(
+            extract_path_parameters("/posts/{post:slug}/comments/{comment:uuid?}"),
+            vec!["post", "comment"]
         );
     }
 }
