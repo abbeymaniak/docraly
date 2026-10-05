@@ -3,14 +3,15 @@ mod parser;
 mod manifest;
 mod discovery;
 mod scanner;
+mod adapter;
 
 use clap::{Parser, Subcommand};
 use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::{fs, time::Duration};
 use figlet_rs::Toilet;
-use parser::{find_classes, find_functions, parse_php};
-use discovery::discover_project;
+use adapter::AdapterRegistry;
+use discovery::{discover_project, Language};
 use scanner::scan_project_sources;
 
 const DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
@@ -89,7 +90,8 @@ fn main() {
     }
 
     if let Some(file) = args.file {
-        let source = match fs::read_to_string(&file) {
+        let file_path = std::path::Path::new(&file);
+        let source = match fs::read_to_string(file_path) {
             Ok(source) => source,
             Err(error) => {
                 eprintln!("{} {}", "Error:".red(), error);
@@ -111,8 +113,13 @@ fn main() {
         pb.enable_steady_tick(Duration::from_millis(80));
         pb.set_message(format!("Parsing {}...", file));
 
-        let tree = match parse_php(&source) {
-            Ok(tree) => tree,
+        let registry = AdapterRegistry::new();
+        let adapter = registry
+            .get(Language::Php)
+            .expect("PHP adapter missing");
+
+        let file_model = match adapter.parse_file(file_path, file_path, &source) {
+            Ok(model) => model,
             Err(error) => {
                 pb.finish_and_clear();
                 eprintln!("{} {}", "Error:".red(), error);
@@ -120,20 +127,30 @@ fn main() {
             }
         };
 
-        pb.set_message("Extracting functions and classes...");
-        let functions = find_functions(tree.root_node(), &source);
-        let classes = find_classes(tree.root_node(), &source);
-
         pb.finish_with_message("✓ Analysis complete".green().to_string());
 
+        if let Some(namespace) = &file_model.namespace {
+            println!("Namespace: {}", namespace.cyan());
+        }
+
+        if !file_model.imports.is_empty() {
+            println!("\n=== Imports ===");
+            for import in &file_model.imports {
+                match &import.alias {
+                    Some(alias) => println!("  use {} as {};", import.path, alias),
+                    None => println!("  use {};", import.path),
+                }
+            }
+        }
+
         println!();
-        println!("{}", "\n=== Analyzing Functions ===".yellow());
-        for function in &functions {
+        println!("{}", "=== Analyzing Functions ===".yellow());
+        for function in &file_model.functions {
             println!("{:#?}", function);
         }
 
         println!("=== Analyzing Classes ===");
-        for class in &classes {
+        for class in &file_model.classes {
             println!("{:#?}", class);
         }
     } else {
@@ -189,5 +206,25 @@ fn run_scan(path: &str) {
         for file in &source_files {
             println!("  - {}", file.relative_path.display());
         }
+    }
+
+    let registry = AdapterRegistry::new();
+    let project_model = registry.parse_project(&source_files);
+
+    if !project_model.files.is_empty() {
+        let total_classes: usize = project_model.files.iter().map(|f| f.classes.len()).sum();
+        let total_functions: usize = project_model.files.iter().map(|f| f.functions.len()).sum();
+        println!();
+        println!(
+            "{}",
+            format!(
+                "Project parsed: {} files, {} classes, {} functions",
+                project_model.files.len(),
+                total_classes,
+                total_functions
+            )
+            .green()
+            .bold()
+        );
     }
 }
