@@ -8,7 +8,7 @@ mod adapter;
 use clap::{Parser, Subcommand};
 use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
-use std::{fs, time::Duration};
+use std::{fs, thread, time::Duration};
 use figlet_rs::Toilet;
 use adapter::AdapterRegistry;
 use discovery::{discover_project, Language};
@@ -110,9 +110,14 @@ fn main() {
                 ]),
         );
 
-        pb.enable_steady_tick(Duration::from_millis(80));
-        pb.set_message(format!("Parsing {}...", file));
+        pb.enable_steady_tick(Duration::from_millis(100));
 
+        // Stage 1
+        pb.set_message("Scanning project...");
+        thread::sleep(Duration::from_secs(1));
+
+        // Stage 2
+        pb.set_message("Parsing PHP...");
         let registry = AdapterRegistry::new();
         let adapter = registry
             .get(Language::Php)
@@ -126,6 +131,19 @@ fn main() {
                 std::process::exit(1);
             }
         };
+        thread::sleep(Duration::from_secs(1));
+
+        // Stage 2.5
+        pb.set_message("Analyzing AST...");
+        thread::sleep(Duration::from_millis(500));
+
+        // Stage 3
+        pb.set_message("Analyzing routes...");
+        thread::sleep(Duration::from_secs(1));
+
+        // Stage 4
+        pb.set_message(format!("Analyzing {}", file));
+        thread::sleep(Duration::from_secs(1));
 
         pb.finish_with_message("✓ Analysis complete".green().to_string());
 
