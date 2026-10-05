@@ -144,14 +144,22 @@ fn main() {
         }
 
         println!();
-        println!("{}", "=== Analyzing Functions ===".yellow());
-        for function in &file_model.functions {
-            println!("{:#?}", function);
+        println!("{}", "=== Top-level Functions ===".yellow());
+        if file_model.functions.is_empty() {
+            println!("  (none)");
+        } else {
+            for function in &file_model.functions {
+                println!("{:#?}", function);
+            }
         }
 
-        println!("=== Analyzing Classes ===");
-        for class in &file_model.classes {
-            println!("{:#?}", class);
+        println!("{}", "\n=== Classes & Methods ===".yellow());
+        if file_model.classes.is_empty() {
+            println!("  (none)");
+        } else {
+            for class in &file_model.classes {
+                println!("{:#?}", class);
+            }
         }
     } else {
         println!("{}", "Run `docraly scan [path]` to scan a project, or `docraly --help` for options.".cyan());
@@ -213,14 +221,21 @@ fn run_scan(path: &str) {
 
     if !project_model.files.is_empty() {
         let total_classes: usize = project_model.files.iter().map(|f| f.classes.len()).sum();
+        let total_methods: usize = project_model
+            .files
+            .iter()
+            .flat_map(|f| &f.classes)
+            .map(|c| c.methods.len())
+            .sum();
         let total_functions: usize = project_model.files.iter().map(|f| f.functions.len()).sum();
         println!();
         println!(
             "{}",
             format!(
-                "Project parsed: {} files, {} classes, {} functions",
+                "Project parsed: {} files, {} classes ({} methods), {} standalone functions",
                 project_model.files.len(),
                 total_classes,
+                total_methods,
                 total_functions
             )
             .green()
