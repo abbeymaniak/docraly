@@ -331,3 +331,271 @@ fn detect_go(
         add_language(languages, Language::Go);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "docraly_test_discovery_{}_{}",
+                name,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir_all(&path).unwrap();
+            TempDir { path }
+        }
+
+        fn write_file(&self, relative: &str, content: &str) {
+            let full = self.path.join(relative);
+            if let Some(parent) = full.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(full, content).unwrap();
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn test_python_package_name_parser() {
+        assert_eq!(
+            python_package_name("Django>=4.2,<5.0"),
+            Some("django".to_string())
+        );
+        assert_eq!(
+            python_package_name("fastapi[all]==0.110.0"),
+            Some("fastapi".to_string())
+        );
+        assert_eq!(
+            python_package_name("requests ; python_version < '3.9'"),
+            Some("requests".to_string())
+        );
+        assert_eq!(python_package_name("# a comment"), None);
+        assert_eq!(python_package_name("-r other-requirements.txt"), None);
+        assert_eq!(python_package_name("   "), None);
+    }
+
+    #[test]
+    fn test_detect_php_laravel_and_symfony() {
+        let temp_laravel = TempDir::new("php_laravel");
+        temp_laravel.write_file(
+            "composer.json",
+            r#"{
+                "require": {
+                    "php": "^8.2",
+                    "laravel/framework": "^11.0"
+                }
+            }"#,
+        );
+
+        let mut languages = Vec::new();
+        let mut frameworks = Vec::new();
+        detect_php(&temp_laravel.path, &mut languages, &mut frameworks);
+        assert_eq!(languages, vec![Language::Php]);
+        assert_eq!(frameworks, vec![Framework::Laravel]);
+
+        let temp_symfony = TempDir::new("php_symfony");
+        temp_symfony.write_file(
+            "composer.json",
+            r#"{
+                "require": {
+                    "symfony/framework-bundle": "^7.0"
+                }
+            }"#,
+        );
+
+        let mut languages = Vec::new();
+        let mut frameworks = Vec::new();
+        detect_php(&temp_symfony.path, &mut languages, &mut frameworks);
+        assert_eq!(languages, vec![Language::Php]);
+        assert_eq!(frameworks, vec![Framework::Symfony]);
+    }
+
+    #[test]
+    fn test_detect_python_fastapi_and_django() {
+        // Test requirements.txt
+        let temp_req = TempDir::new("py_req");
+        temp_req.write_file("requirements.txt", "fastapi>=0.110.0\nuvicorn\n");
+
+        let mut languages = Vec::new();
+        let mut frameworks = Vec::new();
+        detect_python(&temp_req.path, &mut languages, &mut frameworks);
+        assert_eq!(languages, vec![Language::Python]);
+        assert_eq!(frameworks, vec![Framework::FastApi]);
+
+        // Test pyproject.toml PEP 621
+        let temp_pep = TempDir::new("py_pep");
+        temp_pep.write_file(
+            "pyproject.toml",
+            r#"[project]
+name = "my-app"
+dependencies = [
+    "django>=5.0",
+]
+"#,
+        );
+
+        let mut languages = Vec::new();
+        let mut frameworks = Vec::new();
+        detect_python(&temp_pep.path, &mut languages, &mut frameworks);
+        assert_eq!(languages, vec![Language::Python]);
+        assert_eq!(frameworks, vec![Framework::Django]);
+
+        // Test pyproject.toml Poetry
+        let temp_poetry = TempDir::new("py_poetry");
+        temp_poetry.write_file(
+            "pyproject.toml",
+            r#"[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.110.0"
+"#,
+        );
+
+        let mut languages = Vec::new();
+        let mut frameworks = Vec::new();
+        detect_python(&temp_poetry.path, &mut languages, &mut frameworks);
+        assert_eq!(languages, vec![Language::Python]);
+        assert_eq!(frameworks, vec![Framework::FastApi]);
+
+        // Test Pipfile
+        let temp_pip = TempDir::new("py_pip");
+        temp_pip.write_file(
+            "Pipfile",
+            r#"[packages]
+django = "*"
+"#,
+        );
+
+        let mut languages = Vec::new();
+        let mut frameworks = Vec::new();
+        detect_python(&temp_pip.path, &mut languages, &mut frameworks);
+        assert_eq!(languages, vec![Language::Python]);
+        assert_eq!(frameworks, vec![Framework::Django]);
+    }
+
+    #[test]
+    fn test_detect_rust_axum_and_actix() {
+        let temp_axum = TempDir::new("rust_axum");
+        temp_axum.write_file(
+            "Cargo.toml",
+            r#"[package]
+name = "api"
+version = "0.1.0"
+
+[dependencies]
+axum = "0.7"
+"#,
+        );
+
+        let mut languages = Vec::new();
+        let mut frameworks = Vec::new();
+        detect_rust(&temp_axum.path, &mut languages, &mut frameworks);
+        assert_eq!(languages, vec![Language::Rust]);
+        assert_eq!(frameworks, vec![Framework::Axum]);
+
+        let temp_actix = TempDir::new("rust_actix");
+        temp_actix.write_file(
+            "Cargo.toml",
+            r#"[package]
+name = "api"
+version = "0.1.0"
+
+[dependencies]
+actix-web = "4"
+"#,
+        );
+
+        let mut languages = Vec::new();
+        let mut frameworks = Vec::new();
+        detect_rust(&temp_actix.path, &mut languages, &mut frameworks);
+        assert_eq!(languages, vec![Language::Rust]);
+        assert_eq!(frameworks, vec![Framework::Actix]);
+    }
+
+    #[test]
+    fn test_detect_javascript_and_typescript() {
+        // JavaScript with Express
+        let temp_js = TempDir::new("js_express");
+        temp_js.write_file(
+            "package.json",
+            r#"{
+                "dependencies": {
+                    "express": "^4.19.0"
+                }
+            }"#,
+        );
+
+        let mut languages = Vec::new();
+        let mut frameworks = Vec::new();
+        detect_javascript(&temp_js.path, &mut languages, &mut frameworks);
+        assert_eq!(languages, vec![Language::JavaScript]);
+        assert_eq!(frameworks, vec![Framework::Express]);
+
+        // TypeScript with NestJS
+        let temp_ts = TempDir::new("ts_nest");
+        temp_ts.write_file(
+            "package.json",
+            r#"{
+                "dependencies": {
+                    "@nestjs/core": "^10.0.0"
+                },
+                "devDependencies": {
+                    "typescript": "^5.0.0"
+                }
+            }"#,
+        );
+        temp_ts.write_file("tsconfig.json", "{}");
+
+        let mut languages = Vec::new();
+        let mut frameworks = Vec::new();
+        detect_javascript(&temp_ts.path, &mut languages, &mut frameworks);
+        assert_eq!(languages, vec![Language::TypeScript]);
+        assert_eq!(frameworks, vec![Framework::NestJs]);
+    }
+
+    #[test]
+    fn test_detect_go() {
+        let temp_go = TempDir::new("go_test");
+        temp_go.write_file("go.mod", "module example.com/app\n\ngo 1.22\n");
+
+        let mut languages = Vec::new();
+        let mut frameworks = Vec::new();
+        detect_go(&temp_go.path, &mut languages, &mut frameworks);
+        assert_eq!(languages, vec![Language::Go]);
+    }
+
+    #[test]
+    fn test_discover_project_polyglot() {
+        let temp = TempDir::new("polyglot");
+        temp.write_file(
+            "composer.json",
+            r#"{ "require": { "laravel/framework": "^11.0" } }"#,
+        );
+        temp.write_file(
+            "package.json",
+            r#"{ "dependencies": { "express": "^4.19.0" } }"#,
+        );
+
+        let project = discover_project(&temp.path);
+        assert_eq!(project.languages, vec![Language::Php, Language::JavaScript]);
+        assert_eq!(
+            project.frameworks,
+            vec![Framework::Laravel, Framework::Express]
+        );
+    }
+}
+

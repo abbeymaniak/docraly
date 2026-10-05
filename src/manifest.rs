@@ -13,7 +13,6 @@ pub fn read_toml_file(path: &Path) -> Result<toml::Value, String> {
     let contents = fs::read_to_string(path)
         .map_err(|error| format!("Failed to read {}: {error}", path.display()))?;
 
-    contents
-        .parse::<toml::Value>()
+    toml::from_str(&contents)
         .map_err(|error| format!("Failed to parse {}: {error}", path.display()))
 }
