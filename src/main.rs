@@ -7,19 +7,17 @@ mod scanner;
 use clap::{Parser, Subcommand};
 use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
-use std::{fs, thread, time::Duration};
+use std::{fs, time::Duration};
 use figlet_rs::Toilet;
 use parser::{find_classes, find_functions, parse_php};
 use discovery::discover_project;
 use scanner::scan_project_sources;
 
-
-
-const DESCRIPTION: &str = "A Code intelligence and documentation engine built with Rust";
-const VERSION: &str = "0.1.0";
-const AUTHOR: &str = "Abiodun Paul Ogunnaike";
-const WEBSITE: &str = "https://github.com/abbeymaniak/docraly";
-const LICENSE: &str = "MIT";
+const DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const AUTHOR: &str = env!("CARGO_PKG_AUTHORS");
+const WEBSITE: &str = env!("CARGO_PKG_REPOSITORY");
+const LICENSE: &str = env!("CARGO_PKG_LICENSE");
 
 #[derive(Parser)]
 #[command(name = "docraly")]
@@ -110,14 +108,8 @@ fn main() {
                 ]),
         );
 
-        pb.enable_steady_tick(Duration::from_millis(100));
-
-        // Stage 1
-        pb.set_message("Scanning project...");
-        thread::sleep(Duration::from_secs(1));
-
-        // Stage 2
-        pb.set_message("Parsing PHP...");
+        pb.enable_steady_tick(Duration::from_millis(80));
+        pb.set_message(format!("Parsing {}...", file));
 
         let tree = match parse_php(&source) {
             Ok(tree) => tree,
@@ -127,31 +119,18 @@ fn main() {
                 std::process::exit(1);
             }
         };
-        thread::sleep(Duration::from_secs(1));
 
-        // Stage 2.5
-        pb.set_message("Analyzing AST...");
-        thread::sleep(Duration::from_millis(500));
-
-        // Stage 3
-        pb.set_message("Analyzing routes...");
-        thread::sleep(Duration::from_secs(1));
-
-        // Stage 4
-        pb.set_message(format!("Analyzing {}", file));
-        thread::sleep(Duration::from_secs(1));
+        pb.set_message("Extracting functions and classes...");
+        let functions = find_functions(tree.root_node(), &source);
+        let classes = find_classes(tree.root_node(), &source);
 
         pb.finish_with_message("✓ Analysis complete".green().to_string());
-
-        let functions = find_functions(tree.root_node(), &source);
 
         println!();
         println!("{}", "\n=== Analyzing Functions ===".yellow());
         for function in &functions {
             println!("{:#?}", function);
         }
-
-        let classes = find_classes(tree.root_node(), &source);
 
         println!("=== Analyzing Classes ===");
         for class in &classes {
