@@ -4,6 +4,7 @@ mod manifest;
 mod discovery;
 mod scanner;
 mod adapter;
+mod framework;
 
 use clap::{Parser, Subcommand};
 use colored::*;
@@ -11,7 +12,8 @@ use indicatif::{ProgressBar, ProgressStyle};
 use std::{fs, thread, time::Duration};
 use figlet_rs::Toilet;
 use adapter::AdapterRegistry;
-use discovery::{discover_project, Language};
+use discovery::{discover_project, Framework, Language};
+use framework::FrameworkAdapter;
 use scanner::scan_project_sources;
 
 const DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
@@ -139,7 +141,21 @@ fn main() {
 
         // Stage 3
         pb.set_message("Analyzing routes...");
-        thread::sleep(Duration::from_secs(2));
+        let mut routes = Vec::new();
+        if framework::laravel::is_route_file(file_path) || source.contains("Route::") {
+            routes = framework::laravel::parse_routes_from_source(&source);
+            for route in &mut routes {
+                if let model::RouteAction::ControllerMethod {
+                    controller_name,
+                    controller_fqcn,
+                    ..
+                } = &mut route.action
+                {
+                    *controller_fqcn = Some(file_model.resolve_class_name(controller_name));
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(500));
 
         // Stage 4
         pb.set_message(format!("Analyzing {}", file));
@@ -179,6 +195,49 @@ fn main() {
                 println!("{:#?}", class);
             }
         }
+
+        if !routes.is_empty() {
+            println!("{}", "\n=== Discovered Routes ===".yellow());
+            for route in &routes {
+                let action_display = match &route.action {
+                    model::RouteAction::ControllerMethod {
+                        controller_name,
+                        method_name,
+                        controller_fqcn,
+                    } => {
+                        let fqcn_info = if let Some(fqcn) = controller_fqcn {
+                            format!(" ({})", fqcn)
+                        } else {
+                            String::new()
+                        };
+                        format!("{}@{}{}", controller_name, method_name, fqcn_info)
+                    }
+                    model::RouteAction::Closure => "Closure".yellow().to_string(),
+                    model::RouteAction::View(view) => format!("View({})", view).cyan().to_string(),
+                };
+
+                let name_display = route
+                    .name
+                    .as_deref()
+                    .map(|n| format!(" (name: {})", n))
+                    .unwrap_or_default();
+
+                let mw_display = if route.middleware.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [middleware: {}]", route.middleware.join(", "))
+                };
+
+                println!(
+                    "  {:7} {:<35} -> {}{}{}",
+                    route.http_verb.green().bold(),
+                    route.uri.white(),
+                    action_display,
+                    name_display.dimmed(),
+                    mw_display.dimmed(),
+                );
+            }
+        }
     } else {
         println!("{}", "Run `docraly scan [path]` to scan a project, or `docraly --help` for options.".cyan());
     }
@@ -213,7 +272,7 @@ fn run_scan(path: &str) {
     thread::sleep(Duration::from_secs(1));
     let source_files = scan_project_sources(&project);
     let registry = AdapterRegistry::new();
-    let project_model = registry.parse_project(&source_files);
+    let mut project_model = registry.parse_project(&source_files);
 
     // Stage 2.5
     pb.set_message("Analyzing AST...");
@@ -221,7 +280,11 @@ fn run_scan(path: &str) {
 
     // Stage 3
     pb.set_message("Analyzing routes...");
-    thread::sleep(Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(500));
+    if project.frameworks.contains(&Framework::Laravel) {
+        let laravel_adapter = framework::laravel::LaravelAdapter::new();
+        laravel_adapter.analyze(&mut project_model);
+    }
 
     // Stage 4
     pb.set_message(format!("Analyzing {}", path));
@@ -277,18 +340,79 @@ fn run_scan(path: &str) {
             .map(|c| c.methods.len())
             .sum();
         let total_functions: usize = project_model.files.iter().map(|f| f.functions.len()).sum();
+        let all_routes: Vec<&model::Route> = project_model.all_routes().collect();
+
         println!();
         println!(
             "{}",
             format!(
-                "Project parsed: {} files, {} classes ({} methods), {} standalone functions",
+                "Project parsed: {} files, {} classes ({} methods), {} standalone functions, {} routes",
                 project_model.files.len(),
                 total_classes,
                 total_methods,
-                total_functions
+                total_functions,
+                all_routes.len()
             )
             .green()
             .bold()
         );
+
+        if !all_routes.is_empty() {
+            println!();
+            println!(
+                "{}",
+                format!("Discovered Routes ({} found):", all_routes.len())
+                    .cyan()
+                    .bold()
+            );
+            for route in &all_routes {
+                let action_display = match &route.action {
+                    model::RouteAction::ControllerMethod {
+                        controller_name,
+                        method_name,
+                        controller_fqcn,
+                    } => {
+                        let linked = project_model.link_route_to_controller(route);
+                        let link_indicator = if linked.is_some() {
+                            " [linked]".green()
+                        } else {
+                            " [unlinked]".yellow()
+                        };
+                        let fqcn_info = if let Some(fqcn) = controller_fqcn {
+                            format!(" ({})", fqcn)
+                        } else {
+                            String::new()
+                        };
+                        format!(
+                            "{}@{}{}{}",
+                            controller_name, method_name, fqcn_info, link_indicator
+                        )
+                    }
+                    model::RouteAction::Closure => "Closure".yellow().to_string(),
+                    model::RouteAction::View(view) => format!("View({})", view).cyan().to_string(),
+                };
+
+                let name_display = route
+                    .name
+                    .as_deref()
+                    .map(|n| format!(" (name: {})", n))
+                    .unwrap_or_default();
+
+                let mw_display = if route.middleware.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [middleware: {}]", route.middleware.join(", "))
+                };
+
+                println!(
+                    "  {:7} {:<35} -> {}{}{}",
+                    route.http_verb.green().bold(),
+                    route.uri.white(),
+                    action_display,
+                    name_display.dimmed(),
+                    mw_display.dimmed(),
+                );
+            }
+        }
     }
 }
